@@ -9,13 +9,14 @@ const StaffSessionPage = () => {
     const [message, setMessage] = useState("");
     const [scannerActive, setScannerActive] = useState(false);
     const [cameraError, setCameraError] = useState("");
+    const [processing, setProcessing] = useState(false);
 
     const token = localStorage.getItem("token");
     const scannerRef = useRef<Html5Qrcode | null>(null);
 
-    // ---------------------------
+    // ==============================
     // Fetch Slots
-    // ---------------------------
+    // ==============================
     const fetchSlots = async () => {
         try {
             const res = await fetch(`${API}/api/slots`, {
@@ -28,17 +29,17 @@ const StaffSessionPage = () => {
         }
     };
 
-    // ---------------------------
+    // ==============================
     // Start Scanner
-    // ---------------------------
+    // ==============================
     const startScanner = () => {
         setCameraError("");
         setScannerActive(true);
     };
 
-    // ---------------------------
+    // ==============================
     // Stop Scanner
-    // ---------------------------
+    // ==============================
     const stopScanner = async () => {
         try {
             if (scannerRef.current) {
@@ -50,9 +51,9 @@ const StaffSessionPage = () => {
         setScannerActive(false);
     };
 
-    // ---------------------------
-    // Scanner Initialization (STABLE VERSION)
-    // ---------------------------
+    // ==============================
+    // Scanner Init
+    // ==============================
     useEffect(() => {
         if (!scannerActive) return;
 
@@ -61,14 +62,12 @@ const StaffSessionPage = () => {
                 const scanner = new Html5Qrcode("reader");
                 scannerRef.current = scanner;
 
-                // Get available cameras safely
                 const cameras = await Html5Qrcode.getCameras();
 
                 if (!cameras || cameras.length === 0) {
                     throw new Error("No camera found");
                 }
 
-                // Prefer back camera if available
                 const backCamera =
                     cameras.find(cam =>
                         cam.label.toLowerCase().includes("back")
@@ -89,7 +88,7 @@ const StaffSessionPage = () => {
                 );
             } catch (err) {
                 console.error(err);
-                setCameraError("Camera permission denied or camera not available.");
+                setCameraError("Camera permission denied or not available.");
                 setScannerActive(false);
             }
         };
@@ -97,22 +96,26 @@ const StaffSessionPage = () => {
         initScanner();
 
         return () => {
-            if (!scannerRef.current) return;
-
-            scannerRef.current.stop().catch(() => { });
-            try {
-                scannerRef.current.clear();
-            } catch { }
-
-            scannerRef.current = null;
+            if (scannerRef.current) {
+                scannerRef.current.stop().catch(() => { });
+                try {
+                    scannerRef.current.clear();
+                } catch { }
+                scannerRef.current = null;
+            }
         };
     }, [scannerActive]);
 
-    // ---------------------------
+    // ==============================
     // Activate Session
-    // ---------------------------
+    // ==============================
     const activateSession = async () => {
-        if (!scannedSessionId) return;
+        if (!scannedSessionId) {
+            setMessage("⚠ Please scan a user QR first.");
+            return;
+        }
+
+        setProcessing(true);
 
         const res = await fetch(`${API}/api/sessions/activate`, {
             method: "POST",
@@ -124,15 +127,23 @@ const StaffSessionPage = () => {
         });
 
         const data = await res.json();
-        setMessage(data.success ? "Session Activated" : data.message);
+
+        setMessage(data.success ? "✅ Entry Activated Successfully" : data.message);
+
+        setProcessing(false);
         fetchSlots();
     };
 
-    // ---------------------------
+    // ==============================
     // End Session
-    // ---------------------------
+    // ==============================
     const endSession = async () => {
-        if (!scannedSessionId) return;
+        if (!scannedSessionId) {
+            setMessage("⚠ Please scan a user QR first.");
+            return;
+        }
+
+        setProcessing(true);
 
         const res = await fetch(`${API}/api/sessions/end`, {
             method: "POST",
@@ -147,10 +158,11 @@ const StaffSessionPage = () => {
 
         setMessage(
             data.success
-                ? `Bill: ₹${data.totalAmount} (${data.durationHours} hrs)`
+                ? `✅ Exit Processed | Bill: ₹${data.totalAmount} (${data.durationHours} hrs)`
                 : data.message
         );
 
+        setProcessing(false);
         fetchSlots();
     };
 
@@ -165,36 +177,38 @@ const StaffSessionPage = () => {
             </h1>
 
             {message && (
-                <div className="mb-4 p-3 bg-yellow-500/10 border border-yellow-500/20 rounded">
+                <div className="mb-4 p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-xl">
                     {message}
                 </div>
             )}
 
             {cameraError && (
-                <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded text-red-400">
+                <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400">
                     {cameraError}
                 </div>
             )}
 
-            <div className="bg-white/5 p-6 rounded-lg mb-8 space-y-4">
+            <div className="bg-white/5 backdrop-blur-lg p-6 rounded-2xl mb-8 space-y-4 border border-white/10">
                 <div className="flex gap-4 flex-wrap">
                     <button
                         onClick={scannerActive ? stopScanner : startScanner}
-                        className="bg-blue-500 px-6 py-2 rounded font-bold"
+                        className="bg-blue-500 px-6 py-2 rounded-xl font-bold"
                     >
                         {scannerActive ? "Stop Scanner" : "Scan User QR"}
                     </button>
 
                     <button
                         onClick={activateSession}
-                        className="bg-green-500 px-6 py-2 rounded font-bold"
+                        disabled={processing}
+                        className="bg-green-500 px-6 py-2 rounded-xl font-bold disabled:opacity-50"
                     >
                         Activate Entry
                     </button>
 
                     <button
                         onClick={endSession}
-                        className="bg-red-500 px-6 py-2 rounded font-bold"
+                        disabled={processing}
+                        className="bg-red-500 px-6 py-2 rounded-xl font-bold disabled:opacity-50"
                     >
                         Process Exit
                     </button>
@@ -213,7 +227,7 @@ const StaffSessionPage = () => {
                 )}
             </div>
 
-            <div className="bg-white/5 p-6 rounded-lg">
+            <div className="bg-white/5 backdrop-blur-lg p-6 rounded-2xl border border-white/10">
                 <h2 className="text-xl mb-4">Live Slot Status</h2>
                 {slots.map((slot) => (
                     <div
