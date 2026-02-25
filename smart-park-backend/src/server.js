@@ -1,21 +1,45 @@
 require("dotenv").config();
+const fs = require("fs");
+const https = require("https");
+const os = require("os");
 const app = require("./app");
 const connectDB = require("./config/db");
 
 const PORT = process.env.PORT || 5000;
 
+// Helper to get local network IP dynamically
+const getLocalIP = () => {
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+        for (const net of interfaces[name]) {
+            if (net.family === "IPv4" && !net.internal) {
+                return net.address;
+            }
+        }
+    }
+    return "localhost";
+};
+
 const startServer = async () => {
     try {
-        // Connect to MongoDB
         await connectDB();
         console.log("✅ MongoDB Connected");
 
-        // Start server
-        app.listen(PORT, "0.0.0.0", () => {
-            console.log(`🚀 Server running on:`);
-            console.log(`   ➜ http://localhost:${PORT}`);
-            console.log(`   ➜ http://192.168.0.13:${PORT}`);
+        const options = {
+            key: fs.readFileSync("./cert/key.pem"),
+            cert: fs.readFileSync("./cert/cert.pem"),
+        };
+
+        const server = https.createServer(options, app);
+
+        server.listen(PORT, "0.0.0.0", () => {
+            const localIP = getLocalIP();
+
+            console.log("🚀 HTTPS Server running on:");
+            console.log(`   ➜ https://localhost:${PORT}`);
+            console.log(`   ➜ https://${localIP}:${PORT}`);
         });
+
     } catch (error) {
         console.error("❌ Server failed to start:", error.message);
         process.exit(1);
