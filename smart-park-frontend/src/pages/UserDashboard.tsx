@@ -1,53 +1,71 @@
 import { useEffect, useRef, useState } from "react";
 import { QRCodeCanvas } from "qrcode.react";
+import socket from "../utils/socket";
+import { motion } from "framer-motion";
 
 const API = import.meta.env.VITE_API_URL;
 
 const UserDashboard = () => {
+
     const [slots, setSlots] = useState<any[]>([]);
     const [selectedSlot, setSelectedSlot] = useState("");
+
+    const [startTime, setStartTime] = useState("");
+    const [endTime, setEndTime] = useState("");
+
+    const [estimatedCost, setEstimatedCost] = useState(0);
+
     const [activeSession, setActiveSession] = useState<any>(null);
     const [completedSession, setCompletedSession] = useState<any>(null);
+
+    const [rating, setRating] = useState(0);
+    const [review, setReview] = useState("");
+    const [reviewSubmitted, setReviewSubmitted] = useState(false);
+
     const [message, setMessage] = useState("");
     const [loading, setLoading] = useState(false);
     const [showProfile, setShowProfile] = useState(false);
 
-    const [rating, setRating] = useState(0);
-    const [hoverRating, setHoverRating] = useState(0);
-    const [reviewComment, setReviewComment] = useState("");
-    const [reviewSubmitted, setReviewSubmitted] = useState(false);
+    const [elapsedTime, setElapsedTime] = useState("00:00:00");
 
     const billingRef = useRef<HTMLDivElement | null>(null);
 
     const token = localStorage.getItem("token");
     const user = JSON.parse(localStorage.getItem("user") || "{}");
 
-    // ==============================
-    // Fetch Slots
-    // ==============================
+
+    /* ---------------- FETCH SLOTS ---------------- */
+
     const fetchSlots = async () => {
+
         try {
+
             const res = await fetch(`${API}/api/slots`, {
-                headers: { Authorization: `Bearer ${token}` },
+                headers: { Authorization: `Bearer ${token}` }
             });
+
             const data = await res.json();
             setSlots(data.slots || []);
-        } catch (err) {
-            console.error(err);
-        }
+
+        } catch (err) { console.error(err) }
+
     };
 
-    // ==============================
-    // Fetch Session (Polling)
-    // ==============================
+
+    /* ---------------- FETCH SESSION ---------------- */
+
     const fetchActiveSession = async () => {
+
         try {
+
             const res = await fetch(`${API}/api/sessions/my`, {
-                headers: { Authorization: `Bearer ${token}` },
+                headers: { Authorization: `Bearer ${token}` }
             });
+
             const data = await res.json();
 
             if (data.success && data.session) {
+
                 if (data.session.status === "completed") {
                     setActiveSession(null);
                     setCompletedSession(data.session);
@@ -55,322 +73,428 @@ const UserDashboard = () => {
                     setCompletedSession(null);
                     setActiveSession(data.session);
                 }
+
             } else {
                 setActiveSession(null);
                 setCompletedSession(null);
             }
-        } catch (err) {
-            console.error(err);
-        }
+
+        } catch (err) { console.error(err) }
+
     };
 
-    // ==============================
-    // Book Slot
-    // ==============================
-    const bookSlot = async () => {
-        if (!selectedSlot) {
-            setMessage("⚠ Please select a slot before booking.");
+
+    /* ---------------- SOCKET + POLLING ---------------- */
+
+    useEffect(() => {
+
+        fetchSlots();
+        fetchActiveSession();
+
+        const handleUpdate = () => {
+            fetchSlots();
+            fetchActiveSession();
+        };
+
+        socket.on("slotUpdate", handleUpdate);
+
+        const interval = setInterval(() => {
+            fetchActiveSession();
+        }, 4000);
+
+        return () => {
+            socket.off("slotUpdate", handleUpdate);
+            clearInterval(interval);
+        };
+
+    }, []);
+
+
+    /* ---------------- LIVE TIMER ---------------- */
+
+    useEffect(() => {
+
+        if (!activeSession?.entryTime) {
+            setElapsedTime("00:00:00");
             return;
         }
 
-        if (activeSession) {
-            setMessage("⚠ You already have an active session.");
+        const timer = setInterval(() => {
+
+            const start = new Date(activeSession.entryTime).getTime();
+            const now = new Date().getTime();
+            const diff = now - start;
+
+            const hrs = Math.floor(diff / 3600000);
+            const mins = Math.floor((diff % 3600000) / 60000);
+            const secs = Math.floor((diff % 60000) / 1000);
+
+            setElapsedTime(
+                `${hrs.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
+            );
+
+        }, 1000);
+
+        return () => clearInterval(timer);
+
+    }, [activeSession]);
+
+
+    /* ---------------- ESTIMATE BILL ---------------- */
+
+    useEffect(() => {
+
+        if (!startTime || !endTime || !selectedSlot) return;
+
+        const slot = slots.find(s => s._id === selectedSlot);
+
+        if (!slot) return;
+
+        const start = new Date(startTime);
+        const end = new Date(endTime);
+
+        const diff = end.getTime() - start.getTime();
+
+        if (diff <= 0) return;
+
+        const hours = Math.ceil(diff / (1000 * 60 * 60));
+
+        setEstimatedCost(hours * slot.hourlyRate);
+
+    }, [startTime, endTime, selectedSlot, slots]);
+
+
+    /* ---------------- BOOK SLOT ---------------- */
+
+    const bookSlot = async () => {
+
+        if (!selectedSlot) {
+            setMessage("⚠ Select a slot");
+            return;
+        }
+
+        if (!startTime || !endTime) {
+            setMessage("⚠ Select parking time");
             return;
         }
 
         setLoading(true);
-        setMessage("");
 
         try {
+
             const res = await fetch(`${API}/api/sessions/book`, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
-                    Authorization: `Bearer ${token}`,
+                    Authorization: `Bearer ${token}`
                 },
-                body: JSON.stringify({ slotId: selectedSlot }),
+                body: JSON.stringify({
+                    slotId: selectedSlot,
+                    startTime,
+                    endTime
+                })
             });
 
             const data = await res.json();
 
             if (data.success) {
+
                 setActiveSession(data.session);
                 setSelectedSlot("");
+                setStartTime("");
+                setEndTime("");
+                setEstimatedCost(0);
+
                 fetchSlots();
+
                 setMessage("✅ Slot booked successfully!");
+
             } else {
                 setMessage(data.message);
             }
-        } catch (err) {
-            console.error(err);
-        }
+
+        } catch (err) { console.error(err) }
 
         setLoading(false);
+
     };
 
-    // ==============================
-    // Initial Load + Polling
-    // ==============================
-    useEffect(() => {
-        fetchSlots();
-        fetchActiveSession();
 
-        const interval = setInterval(() => {
-            fetchActiveSession();
-        }, 5000);
+    /* ---------------- SLOT STATS ---------------- */
 
-        return () => clearInterval(interval);
-    }, []);
+    const available = slots.filter(s => !s.isOccupied && !s.isReserved).length;
+    const reserved = slots.filter(s => s.isReserved).length;
+    const occupied = slots.filter(s => s.isOccupied).length;
 
-    // Auto clear message
-    useEffect(() => {
-        if (message) {
-            const timeout = setTimeout(() => setMessage(""), 4000);
-            return () => clearTimeout(timeout);
-        }
-    }, [message]);
 
-    // Smooth scroll to billing
-    useEffect(() => {
-        if (completedSession && billingRef.current) {
-            billingRef.current.scrollIntoView({ behavior: "smooth" });
-        }
-    }, [completedSession]);
-
-    const calculateDuration = (entry: string, exit: string) => {
-        const diff = new Date(exit).getTime() - new Date(entry).getTime();
-        return Math.ceil(diff / (1000 * 60 * 60));
-    };
+    /* ---------------- RENDER ---------------- */
 
     return (
-        <div className="min-h-screen bg-[#050b18] text-white relative overflow-hidden">
 
-            {/* HEADER */}
-            <div className="flex justify-between items-center p-8">
-                <h1 className="text-3xl font-bold">
-                    Welcome, {user.name}
-                </h1>
+        <div className="min-h-screen bg-[#050b18] text-white">
 
-                <button
-                    onClick={() => setShowProfile(true)}
-                    className="bg-white/10 backdrop-blur-lg border border-white/20 px-5 py-2 rounded-xl hover:bg-white/20 transition"
-                >
-                    Profile
-                </button>
-            </div>
+            <div className="max-w-6xl mx-auto px-6 py-10">
 
-            {/* MAIN CONTENT */}
-            <div className="px-6 pb-16 flex justify-center">
-                <div className="w-full max-w-4xl">
+                {/* HEADER */}
 
-                    {message && (
-                        <div className="mb-6 p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-xl">
-                            {message}
-                        </div>
-                    )}
+                <div className="flex justify-between items-center mb-8">
 
-                    {/* ACTIVE SESSION */}
-                    {activeSession && (
-                        <div className="bg-white/5 backdrop-blur-lg p-8 rounded-2xl mb-10 border border-white/10 shadow-2xl">
+                    <h1 className="text-3xl font-bold">
+                        Welcome, {user.name}
+                    </h1>
 
-                            <h2 className="text-xl font-semibold mb-4">
-                                Your Active Parking Session
-                            </h2>
-
-                            <div className="mb-4 text-gray-300">
-                                <p>Slot: {activeSession.slot?.slotCode}</p>
-                                <p>Status: {activeSession.status}</p>
-                            </div>
-
-                            {activeSession.status === "active" && (
-                                <div className="mb-4 p-3 bg-green-500/10 border border-green-500/20 rounded-xl text-green-400">
-                                    🚗 Your vehicle is now safely parked.
-                                </div>
-                            )}
-
-                            {(activeSession.status === "booked" ||
-                                activeSession.status === "active") && (
-                                    <>
-                                        <div className="bg-white p-4 rounded-xl inline-block shadow-xl">
-                                            <QRCodeCanvas
-                                                value={activeSession._id}
-                                                size={220}
-                                            />
-                                        </div>
-                                        <p className="mt-4 text-sm text-gray-400">
-                                            QR valid while session is active.
-                                        </p>
-                                    </>
-                                )}
-                        </div>
-                    )}
-
-                    {/* BILLING SECTION */}
-                    {completedSession && (
-                        <div
-                            ref={billingRef}
-                            className="bg-white/5 backdrop-blur-lg p-8 rounded-2xl mb-10 border border-white/10 shadow-2xl"
-                        >
-                            <h2 className="text-xl font-semibold mb-4 text-yellow-400">
-                                Parking Summary
-                            </h2>
-
-                            <p>Slot: {completedSession.slot?.slotCode}</p>
-                            <p>Entry: {new Date(completedSession.entryTime).toLocaleString()}</p>
-                            <p>Exit: {new Date(completedSession.exitTime).toLocaleString()}</p>
-                            <p>
-                                Duration: {calculateDuration(
-                                    completedSession.entryTime,
-                                    completedSession.exitTime
-                                )} hour(s)
-                            </p>
-                            <p className="mt-2 font-bold">
-                                Total Paid: ₹{completedSession.totalAmount}
-                            </p>
-
-                            {!reviewSubmitted && (
-                                <div className="mt-8 pt-6 border-t border-white/10">
-                                    <h3 className="text-lg font-semibold mb-3">
-                                        Rate Your Experience
-                                    </h3>
-
-                                    <div className="flex gap-2 mb-4">
-                                        {[1, 2, 3, 4, 5].map((star) => (
-                                            <button
-                                                key={star}
-                                                onClick={() => setRating(star)}
-                                                onMouseEnter={() => setHoverRating(star)}
-                                                onMouseLeave={() => setHoverRating(0)}
-                                                className="text-2xl"
-                                            >
-                                                <span
-                                                    className={
-                                                        (hoverRating || rating) >= star
-                                                            ? "text-yellow-400"
-                                                            : "text-gray-500"
-                                                    }
-                                                >
-                                                    ★
-                                                </span>
-                                            </button>
-                                        ))}
-                                    </div>
-
-                                    <textarea
-                                        value={reviewComment}
-                                        onChange={(e) => setReviewComment(e.target.value)}
-                                        placeholder="Write your feedback (optional)..."
-                                        className="w-full p-3 rounded-xl bg-[#1a2332] text-white border border-white/10 focus:outline-none focus:ring-2 focus:ring-yellow-500"
-                                        rows={3}
-                                    />
-
-                                    <button
-                                        disabled={!rating}
-                                        onClick={() => {
-                                            setReviewSubmitted(true);
-                                            setMessage("🎉 Thank you for your feedback!");
-                                        }}
-                                        className="mt-4 bg-yellow-500 hover:bg-yellow-400 text-black px-6 py-2 rounded-xl font-bold disabled:opacity-50"
-                                    >
-                                        Submit Review
-                                    </button>
-                                </div>
-                            )}
-
-                            {reviewSubmitted && (
-                                <div className="mt-6 p-4 bg-green-500/10 border border-green-500/20 rounded-xl text-green-400">
-                                    Thank you for rating us ⭐ {rating}/5
-                                </div>
-                            )}
-
-                            <button
-                                onClick={() => {
-                                    setCompletedSession(null);
-                                    setRating(0);
-                                    setReviewComment("");
-                                    setReviewSubmitted(false);
-                                }}
-                                className="mt-6 bg-yellow-500 hover:bg-yellow-400 text-black px-6 py-2 rounded-xl font-bold"
-                            >
-                                Book Again
-                            </button>
-                        </div>
-                    )}
-
-                    {/* BOOKING SECTION */}
-                    {!activeSession && !completedSession && (
-                        <div className="bg-white/5 backdrop-blur-lg p-8 rounded-2xl border border-white/10 shadow-2xl">
-
-                            <h2 className="text-xl font-semibold mb-4">
-                                Book Parking Slot
-                            </h2>
-
-                            <select
-                                value={selectedSlot}
-                                onChange={(e) => setSelectedSlot(e.target.value)}
-                                disabled={loading}
-                                className="w-full p-3 rounded-xl bg-[#1a2332] text-white border border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500 disabled:opacity-50"
-                            >
-                                <option value="">Select Available Slot</option>
-                                {slots
-                                    .filter((slot) => !slot.isOccupied)
-                                    .map((slot) => (
-                                        <option key={slot._id} value={slot._id}>
-                                            {slot.slotCode} — ₹{slot.hourlyRate}/hr
-                                        </option>
-                                    ))}
-                            </select>
-
-                            <button
-                                onClick={bookSlot}
-                                disabled={loading}
-                                className="mt-4 bg-yellow-500 hover:bg-yellow-400 text-black px-6 py-2 rounded-xl font-bold disabled:opacity-50"
-                            >
-                                {loading ? "Processing..." : "Book Slot"}
-                            </button>
-                        </div>
-                    )}
+                    <button
+                        onClick={() => setShowProfile(true)}
+                        className="bg-white/10 border border-white/20 px-5 py-2 rounded-xl hover:bg-white/20"
+                    >
+                        Profile
+                    </button>
 
                 </div>
+
+
+                {/* ACTIVE PARKING */}
+
+                {activeSession && (
+
+                    <motion.div
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="bg-green-500/10 border border-green-400/20 p-6 rounded-xl mb-8"
+                    >
+
+                        <h2 className="font-semibold mb-2">
+                            🚗 Active Parking
+                        </h2>
+
+                        <p>Slot {activeSession.slot?.slotCode}</p>
+
+                        <p className="text-sm text-gray-400">
+                            Started {new Date(activeSession.entryTime).toLocaleTimeString()}
+                        </p>
+
+                        <p className="text-green-400 font-bold mt-2">
+                            {elapsedTime}
+                        </p>
+
+                        <div className="mt-4 bg-white p-4 rounded-xl inline-block">
+                            <QRCodeCanvas value={activeSession._id} size={200} />
+                        </div>
+
+                    </motion.div>
+
+                )}
+
+
+                {/* BILLING */}
+
+                {completedSession && (
+
+                    <div
+                        ref={billingRef}
+                        className="bg-yellow-500/10 border border-yellow-400/20 p-6 rounded-xl mb-8"
+                    >
+
+                        <h2 className="font-bold mb-2">
+                            Parking Summary
+                        </h2>
+
+                        <p>Slot {completedSession.slot?.slotCode}</p>
+
+                        <p>
+                            Entry {new Date(completedSession.entryTime).toLocaleString()}
+                        </p>
+
+                        <p>
+                            Exit {new Date(completedSession.exitTime).toLocaleString()}
+                        </p>
+
+                        <p className="mt-2 font-bold">
+                            Total Paid ₹{completedSession.totalAmount}
+                        </p>
+
+
+                        {/* REVIEW */}
+
+                        {!reviewSubmitted && (
+
+                            <div className="mt-6">
+
+                                <p className="mb-2">Rate your experience</p>
+
+                                <div className="flex gap-2 mb-3">
+                                    {[1, 2, 3, 4, 5].map(star => (
+                                        <button
+                                            key={star}
+                                            onClick={() => setRating(star)}
+                                            className={`text-2xl ${rating >= star ? "text-yellow-400" : "text-gray-500"}`}
+                                        >
+                                            ★
+                                        </button>
+                                    ))}
+                                </div>
+
+                                <textarea
+                                    value={review}
+                                    onChange={(e) => setReview(e.target.value)}
+                                    placeholder="Write review"
+                                    className="w-full p-3 rounded-xl bg-[#1a2332]"
+                                />
+
+                                <button
+                                    onClick={() => setReviewSubmitted(true)}
+                                    className="mt-3 bg-yellow-500 px-6 py-2 rounded-xl text-black font-bold"
+                                >
+                                    Submit Review
+                                </button>
+
+                            </div>
+
+                        )}
+
+                    </div>
+
+                )}
+
+
+                {/* SLOT STATS */}
+
+                <div className="grid grid-cols-3 gap-4 mb-8">
+
+                    <div className="bg-green-500/20 p-4 rounded-xl text-center">
+                        <p className="text-xl font-bold">{available}</p>
+                        <p className="text-xs">Available</p>
+                    </div>
+
+                    <div className="bg-yellow-500/20 p-4 rounded-xl text-center">
+                        <p className="text-xl font-bold">{reserved}</p>
+                        <p className="text-xs">Reserved</p>
+                    </div>
+
+                    <div className="bg-red-500/20 p-4 rounded-xl text-center">
+                        <p className="text-xl font-bold">{occupied}</p>
+                        <p className="text-xs">Occupied</p>
+                    </div>
+
+                </div>
+
+
+                {/* BOOK SLOT */}
+
+                {!activeSession && !completedSession && (
+
+                    <div className="bg-white/5 p-8 rounded-2xl border border-white/10">
+
+                        <h2 className="text-xl font-semibold mb-6">
+                            Choose Parking Slot
+                        </h2>
+
+                        <select
+                            value={selectedSlot}
+                            onChange={(e) => setSelectedSlot(e.target.value)}
+                            className="w-full p-3 rounded-xl bg-[#1a2332]"
+                        >
+
+                            <option value="">Select Slot</option>
+
+                            {slots
+                                .filter(s => !s.isOccupied && !s.isReserved)
+                                .map(slot => (
+                                    <option key={slot._id} value={slot._id}>
+                                        {slot.slotCode} — ₹{slot.hourlyRate}/hr
+                                    </option>
+                                ))}
+
+                        </select>
+
+
+                        {/* TIME SELECT */}
+
+                        <div className="grid grid-cols-2 gap-4 mt-4">
+
+                            <input
+                                type="datetime-local"
+                                value={startTime}
+                                onChange={(e) => setStartTime(e.target.value)}
+                                className="p-3 rounded-xl bg-[#1a2332]"
+                            />
+
+                            <input
+                                type="datetime-local"
+                                value={endTime}
+                                onChange={(e) => setEndTime(e.target.value)}
+                                className="p-3 rounded-xl bg-[#1a2332]"
+                            />
+
+                        </div>
+
+
+                        {/* COST ESTIMATE */}
+
+                        {estimatedCost > 0 && (
+
+                            <div className="mt-4 p-4 bg-green-500/10 border border-green-400/20 rounded-xl">
+
+                                <p>
+                                    Estimated Cost
+                                </p>
+
+                                <p className="text-xl font-bold text-green-400">
+                                    ₹{estimatedCost}
+                                </p>
+
+                            </div>
+
+                        )}
+
+
+                        <button
+                            onClick={bookSlot}
+                            disabled={loading || !selectedSlot}
+                            className="mt-6 w-full bg-yellow-500 hover:bg-yellow-400 text-black py-3 rounded-xl font-bold"
+                        >
+                            {loading ? "Processing..." : "Confirm Booking"}
+                        </button>
+
+                    </div>
+
+                )}
+
             </div>
 
-            {/* PROFILE SIDEBAR (UNCHANGED) */}
-            <div
-                className={`fixed top-0 right-0 h-full w-[420px] bg-[#0b1325] border-l border-white/10 transform transition-transform duration-300 ${showProfile ? "translate-x-0" : "translate-x-full"
-                    }`}
-            >
-                <div className="p-8 h-full overflow-y-auto">
-                    <div className="flex justify-between items-center mb-6">
-                        <h2 className="text-2xl font-bold">Profile</h2>
-                        <button
-                            onClick={() => setShowProfile(false)}
-                            className="text-gray-400 hover:text-white transition"
-                        >
-                            ✕
-                        </button>
-                    </div>
 
-                    <div className="bg-white/5 backdrop-blur-lg p-5 rounded-2xl border border-white/10 mb-6">
-                        <p className="text-lg font-semibold">{user.name}</p>
-                        <p className="text-sm text-gray-400">{user.email}</p>
-                        <p className="mt-2 text-xs bg-yellow-500/20 text-yellow-400 inline-block px-3 py-1 rounded-full">
-                            {user.role?.toUpperCase()}
-                        </p>
-                    </div>
+            {/* PROFILE SIDEBAR */}
+
+            <div className={`fixed top-0 right-0 h-full w-[420px] bg-[#0b1325] border-l border-white/10 transform transition-transform duration-300
+${showProfile ? "translate-x-0" : "translate-x-full"}`}>
+
+                <div className="p-8">
+
+                    <h2 className="text-xl font-bold mb-4">
+                        Profile
+                    </h2>
+
+                    <p>{user.name}</p>
+                    <p className="text-gray-400">{user.email}</p>
 
                     <button
                         onClick={() => {
                             localStorage.clear();
                             window.location.href = "/";
                         }}
-                        className="w-full bg-red-500/80 hover:bg-red-500 py-2 rounded-xl font-semibold"
+                        className="mt-6 bg-red-500 px-4 py-2 rounded-xl"
                     >
                         Logout
                     </button>
+
                 </div>
+
             </div>
+
         </div>
+
     );
+
 };
 
 export default UserDashboard;

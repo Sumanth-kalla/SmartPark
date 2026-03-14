@@ -1,31 +1,21 @@
 const mongoose = require("mongoose");
 
 const locationSchema = new mongoose.Schema({
+
     name: {
         type: String,
-        required: true,
-    },
-    address: String,
-    city: String,
-
-    latitude: {
-        type: Number,
-        required: true,
-    },
-    longitude: {
-        type: Number,
-        required: true,
+        required: true
     },
 
-    pricePerHour: {
-        type: Number,
-        required: true,
+    city: {
+        type: String,
+        required: true
     },
 
-    totalSlots: {
-        type: Number,
-        required: true,
-    },
+    address: {
+        type: String,
+        default: ""
+    }
 
 }, { timestamps: true });
 
