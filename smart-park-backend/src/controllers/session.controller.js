@@ -17,7 +17,6 @@ exports.bookSlot = async (req, res, next) => {
             });
         }
 
-        // Check if user already has active or booked session
         const existingSession = await ParkingSession.findOne({
             user: userId,
             status: { $in: ["booked", "active"] },
@@ -39,18 +38,29 @@ exports.bookSlot = async (req, res, next) => {
             });
         }
 
-        if (slot.isOccupied) {
+        if (slot.isOccupied || slot.isReserved) {
             return res.status(400).json({
                 success: false,
-                message: "Slot already occupied",
+                message: "Slot already booked",
             });
         }
+
+        // reserve slot
+        slot.isReserved = true;
+        await slot.save();
+
+        // 🔹 Create expiry time (15 minutes)
+        const expiry = new Date(Date.now() + 15 * 60 * 1000);
 
         const session = await ParkingSession.create({
             user: userId,
             slot: slotId,
             status: "booked",
+            reservationExpiry: expiry
         });
+
+        const io = req.app.get("io");
+        io.emit("slotUpdate");
 
         res.status(201).json({
             success: true,
@@ -114,8 +124,11 @@ exports.activateSession = async (req, res, next) => {
         session.entryTime = new Date();
         await session.save();
 
+        slot.isReserved = false;
         slot.isOccupied = true;
         await slot.save();
+        const io = req.app.get("io");
+        io.emit("slotUpdate");
 
         res.json({
             success: true,
@@ -160,6 +173,11 @@ exports.endSession = async (req, res, next) => {
                 message: "Session not active",
             });
         }
+        if (session.status === "booked" && expired) {
+
+            slot.isReserved = false
+            session.status = "expired"
+        }
 
         session.exitTime = new Date();
 
@@ -178,7 +196,10 @@ exports.endSession = async (req, res, next) => {
 
         if (slot) {
             slot.isOccupied = false;
+            slot.isReserved = false;
             await slot.save();
+            const io = req.app.get("io");
+            io.emit("slotUpdate");
         }
 
         res.json({
